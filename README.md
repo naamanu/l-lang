@@ -4,18 +4,59 @@ L is a very simple untyped functional programming language based on lambda calcu
 
 This project puts a web interface to the interpreter.
 
-<img width="1710" alt="Screenshot 2025-05-28 at 15 22 22" src="https://github.com/user-attachments/assets/89eec9a1-ae21-4526-a25f-b5dcc605098a" />
-
+![L Language Playground](docs/screenshot.png)
 
 ## 🚀 Project Setup & Run Guide
 
 This project contains:
-- ✅ A **Haskell Scotty server** (`l-lang`)
+
+- ✅ A **Haskell Scotty server** (`l-lang`) with a **built-in Web Playground**
+- ✅ An improved **CLI REPL** with interactive features
 - ✅ A **Vite + React client** (`web-client`)
 - ✅ Docker + Docker Compose configuration to run both together
 - ✅ **Standalone mode** for deploying without the Haskell server
 
 ---
+
+## 🎮 Built-in Haskell Playground & REPL
+
+The Haskell application now includes a fully-featured CLI REPL and a separate Web Playground modeled after the Rust Playground.
+
+### 🖥️ CLI REPL
+
+Run the interactive Read-Eval-Print Loop:
+
+```bash
+stack run -- -r
+# or simply
+stack run
+```
+
+**Features:**
+
+- **Interactive Commands**: `:help`, `:env`, `:quit`
+- **Trace Mode**: Toggle step-by-step evaluation traces with `:trace`
+- **Examples**: Load built-in examples with `:load <name>` (try `factorial`, `fibonacci`, `map`, `foldr`)
+
+### 🌐 Web Playground
+
+Start the built-in web server:
+
+```bash
+stack run -- -w
+```
+
+Visit **[http://localhost:3000](http://localhost:3000)** to access the new UI:
+
+- **Modern Design**: Rust Playground-inspired aesthetic with split panes.
+- **Visual Trace**: See how your code evaluates step-by-step.
+- **Environment View**: Inspect the final state of your variables.
+- **Tailwind CSS**: Clean, responsive styling.
+
+---
+
+---
+
 ## 📦 Project Structure
 
 ```
@@ -25,13 +66,15 @@ docker-compose.yml → top-level orchestration
 ```
 
 ---
+
 ## 🔧 Prerequisites
 
-* Install **Docker** → [https://docs.docker.com/get-docker/](https://docs.docker.com/get-docker/)
-* Install **Docker Compose** → included in recent Docker Desktop versions
+- Install **Docker** → [https://docs.docker.com/get-docker/](https://docs.docker.com/get-docker/)
+- Install **Docker Compose** → included in recent Docker Desktop versions
 
 For standalone mode:
-* Install **Node.js** (v18 or higher) → [https://nodejs.org/](https://nodejs.org/)
+
+- Install **Node.js** (v18 or higher) → [https://nodejs.org/](https://nodejs.org/)
 
 ---
 
@@ -54,12 +97,12 @@ docker compose up --build
 
 ✅ This will:
 
-* Build the **server** from the Haskell Dockerfile.
-* Build the **client** from the React Dockerfile.
-* Expose:
+- Build the **server** from the Haskell Dockerfile.
+- Build the **client** from the React Dockerfile.
+- Expose:
 
-  * **Server** → [http://localhost:3000](http://localhost:3000)
-  * **Client (Vite dev server)** → [http://localhost:5173](http://localhost:5173)
+  - **Server** → [http://localhost:3000](http://localhost:3000)
+  - **Client (Vite dev server)** → [http://localhost:5173](http://localhost:5173)
 
 ### Option 2: Standalone React App (No Haskell Server Required)
 
@@ -101,6 +144,7 @@ npx serve dist
 ```
 
 ✅ **Standalone Features:**
+
 - 🔄 **Offline L language interpreter** - No backend required!
 - 📝 **Sample code snippets** with valid L language syntax
 - 💾 **Local storage** for saving your code snippets
@@ -113,11 +157,11 @@ npx serve dist
 
 ## 🌐 Access the Apps
 
-| Service | Local URL | Description |
-| ------- | --------- | ----------- |
+| Service           | Local URL                                      | Description                    |
+| ----------------- | ---------------------------------------------- | ------------------------------ |
 | Full Stack Client | [http://localhost:5173](http://localhost:5173) | React app with Haskell backend |
-| Haskell Server | [http://localhost:3000](http://localhost:3000) | API server (development) |
-| Standalone App | [http://localhost:8080](http://localhost:8080) | Self-contained React app |
+| Haskell Server    | [http://localhost:3000](http://localhost:3000) | API server (development)       |
+| Standalone App    | [http://localhost:8080](http://localhost:8080) | Self-contained React app       |
 
 ---
 
@@ -126,6 +170,7 @@ npx serve dist
 The standalone app comes with built-in sample snippets demonstrating L language syntax:
 
 ### Basic Arithmetic
+
 ```l
 x = 10
 y = 20
@@ -134,6 +179,7 @@ x * y
 ```
 
 ### Lambda Functions
+
 ```l
 double = \x -> x * 2
 triple = \x -> x * 3
@@ -145,6 +191,7 @@ square 6
 ```
 
 ### Function Composition
+
 ```l
 double = \x -> x * 2
 triple = \x -> x * 3
@@ -155,6 +202,7 @@ doubleTriple 5
 ```
 
 ### Let Expressions
+
 ```l
 double = \x -> x * 2
 let x = 10 in double x
@@ -162,6 +210,7 @@ let y = 5 in let z = y + 3 in z * 2
 ```
 
 ### Complex Example from test.l
+
 ```l
 double = \x -> x * 2
 triple = \x -> x * x * x
@@ -181,41 +230,46 @@ let x = 100 in trippledDoubledComposed (double 10)
 
 ### Full Stack Development
 
-* **Stop the services:**
+- **Stop the services:**
+
   ```bash
   docker-compose down
   ```
 
-* **Rebuild only:**
+- **Rebuild only:**
+
   ```bash
   docker-compose build
   ```
 
-* **View logs:**
+- **View logs:**
+
   ```bash
   docker-compose logs -f
   ```
 
-* **Restart with rebuild:**
+- **Restart with rebuild:**
   ```bash
   docker-compose up --build
   ```
 
 ### Standalone Development
 
-* **Development mode:**
+- **Development mode:**
+
   ```bash
   cd web-client
   npm run dev
   ```
 
-* **Build for production:**
+- **Build for production:**
+
   ```bash
   cd web-client
   npm run build:standalone
   ```
 
-* **Serve built app:**
+- **Serve built app:**
   ```bash
   cd web-client
   npm run serve:standalone
@@ -226,7 +280,9 @@ let x = 100 in trippledDoubledComposed (double 10)
 ## 🚢 Deployment Options
 
 ### Traditional Static Hosting
+
 The standalone build creates a `dist` folder that can be deployed to any static hosting service:
+
 - Netlify
 - Vercel
 - GitHub Pages
@@ -234,6 +290,7 @@ The standalone build creates a `dist` folder that can be deployed to any static 
 - Any web server (Apache, Nginx)
 
 ### Self-Hosted
+
 Use the included `standalone-server.js` script on any Node.js server:
 
 ```bash
@@ -245,6 +302,7 @@ node standalone-server.js
 ```
 
 ### Docker Standalone
+
 Build a lightweight Docker image for the standalone app:
 
 ```dockerfile

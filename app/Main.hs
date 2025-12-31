@@ -3,24 +3,19 @@
 
 module Main (main) where
 
-import Control.Exception (SomeException, catch, evaluate)
 import Control.Monad (foldM)
-import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (ToJSON (..), Value (..), object, (.=))
+import Data.Aeson (ToJSON (..), object, (.=))
 import Data.Char (isSpace)
 import Data.IORef
-import Data.List (dropWhile)
 import qualified Data.Map as Map
-import Data.Text.Lazy (Text, pack, unpack)
+import Data.Maybe (isNothing)
+import Data.Text.Lazy (unpack)
 import Data.Text.Lazy.Encoding (decodeUtf8)
 import Evaluator
 import Network.Wai.Middleware.Cors (simpleCors)
-import Network.Wai.Middleware.RequestLogger (logStdoutDev)
 import Parser
 import System.Environment (getArgs)
-import System.IO (getLine, hFlush, isEOF, stdout)
-import System.Timeout (timeout)
-import Value
+import System.IO (hFlush, isEOF, stdout)
 import Web.Scotty
 
 -- ----------------------------------------------------------------------------
@@ -93,21 +88,11 @@ runWebServer = do
     -- middleware logStdoutDev
 
     get "/" $ do
-      html $
-        mconcat
-          [ "<h1>L Web Interface</h1>",
-            "<p>Enter code (definitions or expressions, one per line) below and click Evaluate.</p>",
-            "<textarea id='code' rows='10' cols='80' style='font-family:monospace;'></textarea><br/>",
-            "<button onclick='evaluateCode()'>Evaluate</button>",
-            "<h2>Outputs / Steps:</h2><div id='outputSteps' style='background-color:#f0f0f0; padding:10px; border:1px solid #ccc; min-height:20px; white-space: pre-wrap;'></div>",
-            "<h2>Evaluation Trace:</h2><pre id='outputTrace' style='background-color:#e0e0e0; padding:10px; border:1px solid #bbb; max-height: 300px; overflow-y: auto; white-space: pre-wrap;'></pre>",
-            "<h2>Final Environment:</h2><pre id='outputEnv' style='background-color:#f0f0f0; padding:10px; border:1px solid #ccc; min-height:20px; max-height: 200px; overflow-y: auto;'></pre>",
-            "<script src='/script.js'></script>"
-          ]
+      file "static/index.html"
 
     get "/script.js" $ do
       setHeader "Content-Type" "application/javascript"
-      file "frontend.js"
+      file "static/script.js"
 
     post "/evaluate" $ do
       codeText <- body
@@ -127,7 +112,7 @@ runWebServer = do
                   Left err -> return $ Left err
                   Right (newEnv, outputStr, maybeAstStr, lineTrace) ->
                     let step = StepResult outputStr maybeAstStr
-                     in return $ Right (newEnv, if null outputStr && maybeAstStr == Nothing then stepsAcc else stepsAcc ++ [step], traceAcc ++ lineTrace)
+                     in return $ Right (newEnv, if null outputStr && isNothing maybeAstStr then stepsAcc else stepsAcc ++ [step], traceAcc ++ lineTrace)
           )
           (Right (initialEnvState, [], []))
           codeLines
@@ -136,7 +121,7 @@ runWebServer = do
         Left errorMsg ->
           return $ MultiEvalResult [] (Just errorMsg) initialEnvState Nothing
         Right (finalEnvState, steps, accumulatedTrace) -> do
-          liftIO $ atomicModifyIORef' sharedEnvRef $ \_ -> (finalEnvState, ())
+          liftIO $ atomicModifyIORef' sharedEnvRef $ const (finalEnvState, ())
           return $ MultiEvalResult steps Nothing finalEnvState (Just accumulatedTrace)
 
       json response
@@ -144,8 +129,17 @@ runWebServer = do
 -- ----------------------------------------------------------------------------
 -- REPL Specific Definitions
 -- ----------------------------------------------------------------------------
-repl :: Env -> IO ()
-repl currentEnv = do
+
+data ReplState = ReplState
+  { rsEnv :: Env,
+    rsTrace :: Bool
+  }
+
+initialReplState :: ReplState
+initialReplState = ReplState {rsEnv = initialEnv, rsTrace = True}
+
+repl :: ReplState -> IO ()
+repl state = do
   putStr "L-Repl> "
   hFlush stdout
   eof <- isEOF
@@ -153,37 +147,92 @@ repl currentEnv = do
     then putStrLn "\nGoodbye!"
     else do
       line <- getLine
-      case line of
-        ":quit" -> putStrLn "Goodbye!"
-        ":env" -> do
-          print currentEnv
-          repl currentEnv
-        _ -> handleInput line currentEnv
+      let trimmed = dropWhile isSpace line
+      case words trimmed of
+        (":quit" : _) -> putStrLn "Goodbye!"
+        (":env" : _) -> do
+          print (rsEnv state)
+          repl state
+        (":trace" : _) -> do
+          let newTrace = not (rsTrace state)
+          putStrLn $ "Trace mode is now " ++ if newTrace then "ON" else "OFF"
+          repl state {rsTrace = newTrace}
+        (":help" : _) -> do
+          printHelp
+          repl state
+        (":examples" : _) -> do
+          printExamples
+          repl state
+        (":load" : name : _) -> do
+          case Map.lookup name examples of
+            Just code -> do
+              putStrLn $ "Loading example '" ++ name ++ "':\n" ++ code
+              handleInput code state
+            Nothing -> do
+              putStrLn $ "Example '" ++ name ++ "' not found. Type :examples to see available ones."
+              repl state
+        _ -> handleInput line state
 
-handleInput :: String -> Env -> IO ()
-handleInput line currentEnv =
+printHelp :: IO ()
+printHelp = do
+  putStrLn "Commands:"
+  putStrLn "  :help          Show this help message"
+  putStrLn "  :quit          Exit the REPL"
+  putStrLn "  :env           Show current environment"
+  putStrLn "  :trace         Toggle evaluation trace (default: ON)"
+  putStrLn "  :examples      List available examples"
+  putStrLn "  :load <name>   Load and run an example"
+  putStrLn "\nSyntax:"
+  putStrLn "  def = expr     Define a variable (supports recursion)"
+  putStrLn "  expr           Evaluate an expression"
+
+examples :: Map.Map String String
+examples =
+  Map.fromList
+    [ ("factorial", "factorial = \\n -> if n == 0 then 1 else n * factorial (n - 1)"),
+      ("fibonacci", "fib = \\n -> if n == 0 then 0 else if n == 1 then 1 else fib (n - 1) + fib (n - 2)"),
+      ("map", "map = \\f xs -> if isEmpty xs then [] else cons (f (head xs)) (map f (tail xs))"),
+      ("filter", "filter = \\p xs -> if isEmpty xs then [] else if p (head xs) then cons (head xs) (filter p (tail xs)) else filter p (tail xs)"),
+      ("sumList", "sum = \\xs -> if isEmpty xs then 0 else head xs + sum (tail xs)"),
+      ("length", "length = \\xs -> if isEmpty xs then 0 else 1 + length (tail xs)"),
+      ("foldr", "foldr = \\f acc xs -> if isEmpty xs then acc else f (head xs) (foldr f acc (tail xs))"),
+      ("reverse", "reverse = \\xs -> let append = \\a b -> if isEmpty a then b else cons (head a) (append (tail a) b) in if isEmpty xs then [] else append (reverse (tail xs)) (cons (head xs) [])")
+    ]
+
+printExamples :: IO ()
+printExamples = do
+  putStrLn "Available Examples:"
+  mapM_ (\(name, _) -> putStrLn $ "  " ++ name) (Map.toList examples)
+
+handleInput :: String -> ReplState -> IO ()
+handleInput line state =
   let trimmedLine = dropWhile isSpace line
+      currentEnv = rsEnv state
+      showTrace = rsTrace state
    in if null trimmedLine
-        then repl currentEnv
+        then repl state
         else case parse parseDefinition trimmedLine of
           Just ((name, expr), "") -> do
             putStrLn $ "Evaluating potentially recursive definition for '" ++ name ++ "'..."
             let newEnv = Map.insert name value currentEnv
                 evalResultAndTrace = eval newEnv expr -- Returns (Value, TraceLog)
                 value = case evalResultAndTrace of
-                  Left err -> Prelude.error $ "Internal error: accessing value from failed recursive eval for " ++ name ++ ": " ++ err
-                  Right (val, _) -> val
+                  Left e -> Prelude.error $ "Internal error: accessing value from failed recursive eval for " ++ name ++ ": " ++ e
+                  Right (v, _) -> v
             case evalResultAndTrace of
               Left err -> do
                 putStrLn $ "Error in definition '" ++ name ++ "': " ++ err
-                repl currentEnv
+                repl state
               Right (_, trace) -> do
                 -- Definition succeeded
                 putStrLn $ "Defined (rec): " ++ name
-                putStrLn "--- Evaluation Trace (Definition) ---"
-                mapM_ (putStrLn . ("  " ++)) trace
-                putStrLn "-------------------------------------"
-                repl newEnv
+                if showTrace
+                  then do
+                    putStrLn "--- Evaluation Trace (Definition) ---"
+                    mapM_ (putStrLn . ("  " ++)) trace
+                    putStrLn "-------------------------------------"
+                  else return ()
+                repl state {rsEnv = newEnv}
           _ ->
             case parse parseExpr trimmedLine of
               Just (exprAST, "") -> do
@@ -192,24 +241,25 @@ handleInput line currentEnv =
                   Right (val, trace) -> do
                     -- Expression evaluation succeeded
                     print val
-                    putStrLn "--- Evaluation Trace ---"
-                    mapM_ (putStrLn . ("  " ++)) trace
-                    putStrLn "----------------------"
-                repl currentEnv
+                    if showTrace
+                      then do
+                        putStrLn "--- Evaluation Trace ---"
+                        mapM_ (putStrLn . ("  " ++)) trace
+                        putStrLn "----------------------"
+                      else return ()
+                repl state
               Just (_, rest) -> do
                 putStrLn ("Parse Error: Unexpected input near: '" ++ take 20 rest ++ "...'")
-                repl currentEnv
+                repl state
               Nothing -> do
                 putStrLn "Parse Error: Invalid input."
-                repl currentEnv
+                repl state
 
 runRepl :: IO ()
 runRepl = do
   putStrLn "Starting L Language REPL..."
-  putStrLn "Define: name = expression (recursion supported)"
-  putStrLn "Evaluate: expression (built-ins: map, filter, length)"
-  putStrLn "Commands: :quit, :env"
-  repl initialEnv
+  putStrLn "Type :help for commands."
+  repl initialReplState
 
 -- ----------------------------------------------------------------------------
 -- Main Entry Point - Selects Mode
