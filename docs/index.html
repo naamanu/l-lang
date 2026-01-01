@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>L Language Documentation</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+  <meta name="description" content="L Language Documentation">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+  <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+  <style>
+      .sidebar { background-color: #f7f7f7; }
+      .markdown-section code { background-color: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: 'L Language',
+      repo: 'https://github.com/claeusdev/l-lang',
+      loadSidebar: true,
+      subMaxLevel: 3,
+      auto2top: true,
+      basePath: '/docs/', // Important: serve files from /docs/ path
+      homepage: 'getting_started.md'
+    }
+  </script>
+  <!-- Docsify v4 -->
+  <script src="//cdn.jsdelivr.net/npm/docsify@4"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-haskell.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+- [Getting Started](getting_started.md)
+- [Language Reference](language_reference.md)
+- [Architecture](architecture.md)
+- [Screenshot](screenshot.png)

@@ -7,6 +7,7 @@ import Control.Monad (foldM)
 import Data.Aeson (ToJSON (..), object, (.=))
 import Data.Char (isSpace)
 import Data.IORef
+import Data.List (isInfixOf)
 import qualified Data.Map as Map
 import Data.Maybe (isNothing)
 import Data.Text.Lazy (unpack)
@@ -94,6 +95,16 @@ runWebServer = do
       setHeader "Content-Type" "application/javascript"
       file "static/script.js"
 
+    -- Documentation Routes
+    get "/docs/" $ file "docs/index.html"
+    get "/docs" $ redirect "/docs/"
+    get "/docs/:filename" $ do
+      fileName <- param "filename"
+      -- Simple directory traversal protection (very basic)
+      -- Allow standard filenames and ensure no ".." traversal
+      if not (".." `isInfixOf` fileName)
+        then file $ "docs/" ++ fileName
+        else next -- Pass through if invalid or let Scotty handle 404
     post "/evaluate" $ do
       codeText <- body
       let codeString = unpack (decodeUtf8 codeText)
