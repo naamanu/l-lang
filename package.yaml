@@ -1,41 +1,21 @@
-name:                l-lang
-version:             0.1.0.0
-github:              "naamanu/l-lang"
-license:             BSD-3-Clause
-author:              "Nana Adjei Manu"
-maintainer:          "https://github.com/naamanu"
-copyright:           "2025 Nana Adjei Manu"
-
+name: l-lang
+version: 0.2.0.0
+github: naamanu/l-lang
+license: BSD-3-Clause
+author: Nana Adjei Manu
+maintainer: https://github.com/naamanu
+copyright: 2025 Nana Adjei Manu
+synopsis: A small, traceable functional language
+description: See README.md for the language and supported workflows.
 extra-source-files:
 - README.md
 - CHANGELOG.md
-
-# Metadata used when publishing your package
-# synopsis:            Short description of your package
-# category:            Web
-
-# To avoid duplicated efforts in documentation and dealing with the
-# complications of embedding Haddock markup inside cabal files, it is
-# common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/naamanu/l-lang#readme>
-
+- docs/*.md
+data-files:
+- examples/programs.json
 dependencies:
-- base >= 4.7 && < 5
+- base >= 4.19 && < 5
 - containers
-- array
-- parsec
-- QuickCheck
-- hspec
-- HUnit
-- directory
-- filepath
-- scotty
-- aeson
-- text
-- vector
-- wai-cors
-- wai-extra
-
 ghc-options:
 - -Wall
 - -Wcompat
@@ -46,31 +26,28 @@ ghc-options:
 - -Wmissing-home-modules
 - -Wpartial-fields
 - -Wredundant-constraints
-
 library:
   source-dirs: src
-  build-tools:
-  - alex
-  - happy
-
+  dependencies:
+  - aeson
+  - text
+  - scotty
+  - directory
+  - filepath
 executables:
   l-lang-exe:
-    main:                Main.hs
-    source-dirs:         app
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - l-lang
-
+    main: Main.hs
+    source-dirs: app
+    ghc-options: [-threaded, -rtsopts, '-with-rtsopts=-N']
+    dependencies: [l-lang]
 tests:
   l-lang-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
+    main: Spec.hs
+    source-dirs: test
+    ghc-options: [-threaded, -rtsopts, '-with-rtsopts=-N']
     dependencies:
     - l-lang
+    - HUnit
+    - QuickCheck
+    - aeson
+    - text

@@ -1,179 +1,170 @@
-{-# LANGUAGE LambdaCase #-}
-{-# OPTIONS_GHC -Wno-name-shadowing #-}
-
+{-# LANGUAGE BangPatterns #-}
 module Evaluator
-  ( eval,
-    Env,
-    initialEnv,
-    TraceLog,
-  )
-where
+  ( eval, evalWithState, defineWithState, Env, initialEnv, TraceLog
+  , EvalOptions (..), defaultEvalOptions, EvalState, initialEvalState
+  , evaluationCount, traceLog, traceTruncated
+  ) where
 
 import Ast
+import Control.Monad (ap)
 import qualified Data.Map as Map
-import Parser
+import Diagnostic
 import Value
 
--- Define a type alias for the trace log
 type TraceLog = [String]
 
--- Helper to indent trace messages for sub-evaluations
-indentLog :: TraceLog -> TraceLog
-indentLog = map ("  " ++)
+data EvalOptions = EvalOptions
+  { maxEvaluations :: Int
+  , maxDepth :: Int
+  , tracing :: Bool
+  , maxTraceEntries :: Int
+  , maxTraceEntryLength :: Int
+  } deriving (Eq, Show)
 
--- ----------------------------------------------------------------------------
--- Placeholder Primitive Implementations & Initial Environment
--- ----------------------------------------------------------------------------
+defaultEvalOptions :: EvalOptions
+defaultEvalOptions = EvalOptions 100000 1000 True 2000 512
+
+data EvalState = EvalState
+  { evaluationCount :: !Int
+  , traceCount :: !Int
+  , reversedTrace :: TraceLog
+  , traceTruncated :: !Bool
+  }
+
+initialEvalState :: EvalState
+initialEvalState = EvalState 0 0 [] False
+
+traceLog :: EvalState -> TraceLog
+traceLog = reverse . reversedTrace
 
 initialEnv :: Env
-initialEnv =
-  Map.empty
+initialEnv = Map.empty
 
--- ----------------------------------------------------------------------------
--- Evaluator Core
--- ----------------------------------------------------------------------------
+-- State is retained on errors so a failed run can explain what happened.
+newtype Evaluation a = Evaluation {runEvaluation :: EvalState -> (Either Diagnostic a, EvalState)}
+instance Functor Evaluation where
+  fmap f action = action >>= pure . f
+instance Applicative Evaluation where
+  pure a = Evaluation (\s -> (Right a, s))
+  (<*>) = ap
+instance Monad Evaluation where
+  action >>= next = Evaluation $ \s -> case runEvaluation action s of
+    (Left d, s') -> (Left d, s')
+    (Right a, s') -> runEvaluation (next a) s'
 
-isVNum :: Value -> Bool
-isVNum (VNum _) = True
-isVNum _ = False
+failure :: SourceSpan -> String -> String -> Evaluation a
+failure loc errorCode reason = Evaluation (\s -> (Left (Diagnostic errorCode reason loc), s))
 
--- Helper for binary operations
-evalBinaryOp ::
-  Expr ->
-  Expr ->
-  Env ->
-  String -> -- opSymbol (e.g., "+", "==")
-  (Int -> Int -> Value) -> -- opArithFn: ONLY for arithmetic operations on Ints
-  (Value -> Bool) -> -- typeCheckOperand: for validating operands (esp. for arithmetic)
-  String -> -- expectedTypeStr: for error messages if typeCheckOperand fails
-  Either String (Value, TraceLog)
-evalBinaryOp e1 e2 env opSymbol opArithFn typeCheckOperand expectedTypeStr = do
-  let entryLog = "Eval " ++ opSymbol ++ " on (" ++ show e1 ++ ") and (" ++ show e2 ++ ")"
-  (v1, log1) <- eval env e1
-  (v2, log2) <- eval env e2
-  let opStepLog = " Performing " ++ opSymbol ++ " on " ++ show v1 ++ " and " ++ show v2
+record :: EvalOptions -> String -> Evaluation ()
+record opts entry = Evaluation $ \s ->
+  if not (tracing opts) then (Right (), s)
+  else if traceCount s >= maxTraceEntries opts then (Right (), s {traceTruncated = True})
+  else
+    let limit = max 1 (maxTraceEntryLength opts)
+        prefix = take (limit + 1) entry
+        shortened = length prefix > limit
+        displayed = if shortened then take (limit - 1) prefix ++ "…" else prefix
+     in (Right (), s {traceCount = traceCount s + 1, reversedTrace = displayed : reversedTrace s,
+                      traceTruncated = traceTruncated s || shortened})
 
-  if opSymbol == "=="
-    then
-      -- For Eq, type checking is trivial (handled by Value's Eq instance)
-      -- The typeCheckOperand for Eq is (\_ -> True) because any pair is "valid" for Eq.
-      let resVal = VBool (v1 == v2) -- Uses the 'Eq Value' instance
-       in Right (resVal, [entryLog] ++ indentLog log1 ++ indentLog log2 ++ [opStepLog, "  -> " ++ show resVal])
-    else
-      -- For arithmetic operations (+, -, *)
-      if typeCheckOperand v1 && typeCheckOperand v2
-        then case (v1, v2) of
-          (VNum n1, VNum n2) ->
-            let resVal = opArithFn n1 n2 -- opArithFn is Int -> Int -> Value
-             in Right (resVal, [entryLog] ++ indentLog log1 ++ indentLog log2 ++ [opStepLog, "  -> " ++ show resVal])
-          _ -> Left ("Internal error: Type check passed but operands not VNum for arithmetic op '" ++ opSymbol ++ "'. Got " ++ show v1 ++ " and " ++ show v2)
-        else Left ("Type Error: " ++ opSymbol ++ " expects " ++ expectedTypeStr ++ ". Got " ++ show v1 ++ " and " ++ show v2)
+tick :: EvalOptions -> Int -> SourceSpan -> Evaluation ()
+tick opts depth loc = Evaluation $ \s ->
+  if evaluationCount s >= maxEvaluations opts then
+    (Left (Diagnostic "limit.evaluations" "Evaluation step limit exceeded" loc), s)
+  else if depth >= maxDepth opts then
+    (Left (Diagnostic "limit.depth" "Evaluation nesting limit exceeded" loc), s)
+  else (Right (), s {evaluationCount = evaluationCount s + 1})
 
--- Main eval function
+evaluateExpr :: EvalOptions -> Int -> SourceSpan -> Env -> Expr -> Evaluation Value
+evaluateExpr opts depth inherited env expression = case expression of
+  At loc e -> evaluateExpr opts depth loc env e
+  _ -> do
+    tick opts depth inherited
+    record opts (replicate (min 40 depth) ' ' ++ "Eval " ++ show (stripLocations expression))
+    value <- go expression
+    record opts (replicate (min 40 depth) ' ' ++ "=> " ++ show value)
+    pure value
+  where
+    sub = evaluateExpr opts (depth + 1) inherited env
+    err = failure inherited
+    binary operation left right = do
+      a <- sub left
+      b <- sub right
+      case (a, b) of
+        (VNum x, VNum y) -> let !n = operation x y in pure (VNum n)
+        _ -> err "type.arithmetic" "Arithmetic expects two integers"
+    go expr = case expr of
+      Num n -> n `seq` pure (VNum n)
+      BoolLit b -> pure (VBool b)
+      Var name -> case Map.lookup name env of
+        Just value -> pure value
+        Nothing -> err "name.undefined" ("Undefined variable: " ++ name)
+      Lam name body -> pure (VClosure name body env)
+      App function argument -> do
+        f <- sub function
+        value <- sub argument
+        case f of
+          VClosure name body captured -> evaluateExpr opts (depth + 1) inherited (Map.insert name value captured) body
+          _ -> err "type.application" ("Cannot apply a non-function: " ++ take 100 (show f))
+      Let name bound body -> do
+        value <- sub bound
+        evaluateExpr opts (depth + 1) inherited (Map.insert name value env) body
+      IfThenElse condition yes no -> do
+        value <- sub condition
+        case value of
+          VBool True -> sub yes
+          VBool False -> sub no
+          _ -> err "type.condition" "The if condition must be a Boolean"
+      Add a b -> binary (+) a b
+      Sub a b -> binary (-) a b
+      Mul a b -> binary (*) a b
+      Eq a b -> do
+        x <- sub a
+        y <- sub b
+        let !same = equalValues x y
+        pure (VBool same)
+      List elements -> VList <$> mapM sub elements
+      Cons item rest -> do
+        value <- sub item
+        list <- sub rest
+        case list of
+          VList values -> pure (VList (value : values))
+          _ -> err "type.list" "The second argument to cons must be a list"
+      Head list -> do
+        value <- sub list
+        case value of
+          VList (first : _) -> pure first
+          VList [] -> err "runtime.empty-list" "Cannot take head of an empty list"
+          _ -> err "type.list" "head expects a list"
+      Tail list -> do
+        value <- sub list
+        case value of
+          VList (_ : rest) -> pure (VList rest)
+          VList [] -> err "runtime.empty-list" "Cannot take tail of an empty list"
+          _ -> err "type.list" "tail expects a list"
+      IsEmpty list -> do
+        value <- sub list
+        case value of
+          VList values -> pure (VBool (null values))
+          _ -> err "type.list" "isEmpty expects a list"
+      At loc inner -> evaluateExpr opts depth loc env inner
+
+evalWithState :: EvalOptions -> Env -> Expr -> EvalState -> (Either Diagnostic Value, EvalState)
+evalWithState opts env expr = runEvaluation (evaluateExpr opts 0 (pointSpan 1 1) env expr)
+
+-- Only syntactic lambdas get a recursive environment. Their captured map stays
+-- lazy; no arbitrary expression is tied into a self-referential value thunk.
+defineWithState :: EvalOptions -> Env -> String -> Expr -> EvalState -> (Either Diagnostic Value, EvalState)
+defineWithState opts env name expr = evalWithState opts definitionEnv expr
+  where
+    definitionEnv = case lambda expr of
+      Just (argument, body) -> let captured = Map.insert name (VClosure argument body captured) env in captured
+      Nothing -> env
+    lambda (At _ e) = lambda e
+    lambda (Lam argument body) = Just (argument, body)
+    lambda _ = Nothing
+
 eval :: Env -> Expr -> Either String (Value, TraceLog)
-eval env e = case e of
-  Num n ->
-    let v = VNum n
-        trace = ["Eval Num " ++ show n ++ " -> " ++ show v]
-     in Right (v, trace)
-  BoolLit b ->
-    let v = VBool b
-        trace = ["Eval BoolLit " ++ show b ++ " -> " ++ show v]
-     in Right (v, trace)
-  Var x ->
-    let entryLog = "Eval Var " ++ x
-     in case Map.lookup x env of
-          Just v -> Right (v, [entryLog ++ " -> " ++ show v])
-          Nothing -> Left ("Undefined variable: " ++ x)
-  Lam var body ->
-    let v = VClosure var body env -- Crucially captures current env
-        trace = ["Eval Lam " ++ var ++ " -> " ++ show v]
-     in Right (v, trace)
-  App fun arg -> do
-    let entryLog = "Eval App (" ++ show fun ++ ") (" ++ show arg ++ ")"
-    (funVal, funLog) <- eval env fun
-    (argVal, argLog) <- eval env arg
-    let applyLog = " Apply " ++ show funVal ++ " to " ++ show argVal
-    case funVal of
-      VClosure var body closureEnv -> do
-        (resVal, bodyLog) <- eval (Map.insert var argVal closureEnv) body
-        Right (resVal, [entryLog] ++ indentLog funLog ++ indentLog argLog ++ [applyLog] ++ indentLog bodyLog ++ ["  -> " ++ show resVal])
-      VPrim name primFn ->
-        case primFn argVal of -- Primitive itself doesn't return a log directly here
-          Left err -> Left err
-          Right resPrim -> Right (resPrim, [entryLog] ++ indentLog funLog ++ indentLog argLog ++ [applyLog, "  Primitive " ++ name ++ " -> " ++ show resPrim])
-      _ -> Left ("Type Error: Attempted to apply non-function: " ++ show funVal)
-  Let var boundExpr bodyExpr -> do
-    let entryLog = "Eval Let " ++ var ++ " = " ++ show boundExpr ++ " in ..."
-    (boundVal, boundLog) <- eval env boundExpr
-    let env' = Map.insert var boundVal env
-    let letStepLog = "  With " ++ var ++ " = " ++ show boundVal
-    (bodyVal, bodyLog) <- eval env' bodyExpr
-    Right (bodyVal, [entryLog] ++ indentLog boundLog ++ [letStepLog] ++ indentLog bodyLog ++ ["  -> " ++ show bodyVal])
-  IfThenElse cond thn els -> do
-    let entryLog = "Eval If " ++ show cond ++ " then ..."
-    (condVal, condLog) <- eval env cond
-    let stepCond = " Condition " ++ show cond ++ " evaluated to " ++ show condVal
-    case condVal of
-      VBool True -> do
-        (thnVal, thnLog) <- eval env thn
-        Right (thnVal, [entryLog] ++ indentLog condLog ++ [stepCond, "  Then branch taken"] ++ indentLog thnLog ++ ["  -> " ++ show thnVal])
-      VBool False -> do
-        (elsVal, elsLog) <- eval env els
-        Right (elsVal, [entryLog] ++ indentLog condLog ++ [stepCond, "  Else branch taken"] ++ indentLog elsLog ++ ["  -> " ++ show elsVal])
-      _ -> Left "Type Error: 'if' condition must evaluate to a Boolean."
-  Add e1 e2 -> evalBinaryOp e1 e2 env "+" (\n1 n2 -> VNum (n1 + n2)) isVNum "numbers"
-  Sub e1 e2 -> evalBinaryOp e1 e2 env "-" (\n1 n2 -> VNum (n1 - n2)) isVNum "numbers"
-  Mul e1 e2 -> evalBinaryOp e1 e2 env "*" (\n1 n2 -> VNum (n1 * n2)) isVNum "numbers"
-  Eq e1 e2 ->
-    evalBinaryOp
-      e1
-      e2
-      env
-      "=="
-      (\_n1 _n2 -> error "Arithmetic function should not be called for Eq") -- Dummy fn
-      (\_val -> True) -- Type check for Eq operands: any value is fine
-      "comparable values"
-  List exprs -> do
-    let entryLog = "Eval List [" ++ show (length exprs) ++ " elements]"
-    -- Evaluate all elements and collect values and logs
-    resultsAndLogs <- mapM (eval env) exprs
-    let (vals, logsNested) = unzip resultsAndLogs
-    let resVal = VList vals
-    Right (resVal, [entryLog] ++ concatMap indentLog logsNested ++ ["  -> " ++ show resVal])
-  Cons e1 e2 -> do
-    let entryLog = "Eval Cons (" ++ show e1 ++ ") (" ++ show e2 ++ ")"
-    (v1, log1) <- eval env e1
-    (v2, log2) <- eval env e2
-    let consStepLog = " Consing " ++ show v1 ++ " with " ++ show v2
-    case v2 of
-      VList vs ->
-        let resVal = VList (v1 : vs)
-         in Right (resVal, [entryLog] ++ indentLog log1 ++ indentLog log2 ++ [consStepLog, "  -> " ++ show resVal])
-      _ -> Left "Type Error: Second argument to 'cons' must be a list."
-  Head e -> do
-    let entryLog = "Eval Head (" ++ show e ++ ")"
-    (v, logSub) <- eval env e
-    let headStepLog = " Head of " ++ show v
-    case v of
-      VList (x : _) -> Right (x, [entryLog] ++ indentLog logSub ++ [headStepLog, "  -> " ++ show x])
-      VList [] -> Left "Runtime Error: Cannot take head of an empty list."
-      _ -> Left "Type Error: 'head' requires a list argument."
-  Tail e -> do
-    let entryLog = "Eval Tail (" ++ show e ++ ")"
-    (v, logSub) <- eval env e
-    let tailStepLog = " Tail of " ++ show v
-    case v of
-      VList (_ : xs) ->
-        let resVal = VList xs
-         in Right (resVal, [entryLog] ++ indentLog logSub ++ [tailStepLog, "  -> " ++ show resVal])
-      VList [] -> Left "Runtime Error: Cannot take tail of an empty list."
-      _ -> Left "Type Error: 'tail' requires a list argument."
-  IsEmpty e -> do
-    let entryLog = "Eval IsEmpty (" ++ show e ++ ")"
-    (v, logSub) <- eval env e
-    let isEmptyStepLog = " IsEmpty on " ++ show v
-    case v of
-      VList [] -> Right (VBool True, [entryLog] ++ indentLog logSub ++ [isEmptyStepLog, "  -> True"])
-      VList _ -> Right (VBool False, [entryLog] ++ indentLog logSub ++ [isEmptyStepLog, "  -> False"])
-      _ -> Left "Type Error: 'isEmpty' requires a list argument."
+eval env expr = case evalWithState defaultEvalOptions env expr initialEvalState of
+  (Left diagnostic, _) -> Left (message diagnostic)
+  (Right value, state) -> Right (value, traceLog state)

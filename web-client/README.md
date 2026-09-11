@@ -1,54 +1,23 @@
-# React + TypeScript + Vite
+# L playground
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React and Monaco provide the editor; Haskell is the only evaluator. Monaco and its
+worker are bundled locally. The editor loads as a separate chunk.
 
-Currently, two official plugins are available:
+Use Node.js 22. From the repository root:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```sh
+npm --prefix web-client ci
+npm --prefix web-client run build
+stack run -- -w
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Open http://localhost:3000. For development, run `npm --prefix web-client run dev`
+in a second terminal; Vite proxies evaluation to Haskell.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Run `npm run lint`, `npm run test:unit`, and `npm run build` here. Browser tests use
+`npx playwright install chromium` followed by `npm test`; they start the actual
+Haskell server. See [the development guide](../docs/getting_started.md).
 
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
-```
+Numbers in environment responses are decimal strings, never JavaScript numbers.
+Every Run starts fresh. A server outage shows an error, with no offline fallback.
+The example fixtures are shared with Haskell at `../examples/programs.json`.

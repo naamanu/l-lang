@@ -1,223 +1,184 @@
-{-# LANGUAGE LambdaCase #-}
-
-module Parser where
+module Parser (Parser, parse, parseExpr, parseDefinition, parseStatement) where
 
 import Ast
-import Control.Applicative
-import Control.Monad (MonadPlus (..), ap)
-import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
+import Control.Applicative (Alternative (..), some, many)
+import Control.Monad (ap)
+import Data.Char (isAlpha, isAlphaNum, isSpace, ord)
+import Data.List (isPrefixOf)
+import Diagnostic
 
--- ----------------------------------------------------------------------------
--- Parser
--- ----------------------------------------------------------------------------
-
-newtype Parser a = Parser {parse :: String -> Maybe (a, String)}
+-- A failure records both its location and whether input was committed. Only
+-- lexical lookahead backtracks; malformed syntax cannot silently become a prefix.
+data Cursor = Cursor {remaining :: String, position :: Position, nesting :: Int}
+data Reply a = Parsed a Cursor | Failed Bool Diagnostic
+newtype Parser a = Parser {runParser :: Cursor -> Reply a}
 
 instance Functor Parser where
-  fmap f (Parser p) = Parser $ \s -> do
-    (a, s') <- p s
-    return (f a, s')
-
+  fmap f p = p >>= pure . f
 instance Applicative Parser where
-  pure a = Parser $ \s -> Just (a, s)
-  (<*>) = ap -- Use Control.Monad.ap for Applicative (<*>)
-
+  pure a = Parser (Parsed a)
+  (<*>) = ap
 instance Monad Parser where
-  return = pure
-  Parser p >>= f = Parser $ \s -> do
-    (a, s') <- p s
-    parse (f a) s'
-
+  Parser p >>= f = Parser $ \s -> case p s of
+    Failed committed d -> Failed committed d
+    Parsed a s' -> case runParser (f a) s' of
+      Failed committed d -> Failed (committed || position s' /= position s) d
+      success -> success
 instance Alternative Parser where
-  empty = Parser $ \_ -> Nothing
-  Parser p1 <|> Parser p2 = Parser $ \s -> p1 s <|> p2 s
+  empty = expected "expression"
+  Parser p <|> Parser q = Parser $ \s -> case p s of
+    Failed False first -> case q s of
+      Failed committed second -> Failed committed (furthest first second)
+      success -> success
+    result -> result
 
-instance MonadPlus Parser where
-  mzero = empty
-  mplus = (<|>)
+furthest :: Diagnostic -> Diagnostic -> Diagnostic
+furthest a b
+  | start (sourceSpan a) > start (sourceSpan b) = a
+  | otherwise = b
 
--- Basic Parser Combinators
-satisfy :: (Char -> Bool) -> Parser Char
-satisfy p = Parser $ \case
-  (c : cs) | p c -> Just (c, cs)
-  _ -> Nothing
+expected :: String -> Parser a
+expected label = Parser $ \s -> Failed False $ Diagnostic "parse.expected"
+  ("Expected " ++ label) (SourceSpan (position s) (advance (position s) ' '))
+
+attempt :: Parser a -> Parser a
+attempt (Parser p) = Parser $ \s -> case p s of
+  Failed _ d -> Failed False d
+  result -> result
+
+advance :: Position -> Char -> Position
+advance (Position row col) c
+  | c == '\n' = Position (row + 1) 1
+  | otherwise = Position row (col + if ord c > 0xffff then 2 else 1)
+
+satisfy :: String -> (Char -> Bool) -> Parser Char
+satisfy label predicate = Parser $ \s -> case remaining s of
+  c : rest | predicate c -> Parsed c s {remaining = rest, position = advance (position s) c}
+  _ -> runParser (expected label) s
 
 char :: Char -> Parser Char
-char c = satisfy (== c)
+char c = satisfy (show c) (== c)
 
 string :: String -> Parser String
 string = traverse char
 
--- Whitespace handling
-ws :: Parser ()
-ws = () <$ many (satisfy isSpace)
+space :: Parser ()
+space = Parser $ \s -> Parsed () (skip s)
+  where
+    skip s = case remaining s of
+      c : rest | isSpace c -> skip s {remaining = rest, position = advance (position s) c}
+      rest | "--" `isPrefixOf` rest ->
+        let comment = takeWhile (/= '\n') rest
+         in skip s {remaining = drop (length comment) rest,
+                    position = foldl advance (position s) comment}
+      _ -> s
 
-token :: Parser a -> Parser a
-token p = ws *> p <* ws
+lexeme :: Parser a -> Parser a
+lexeme p = p <* space
 
--- Lexemes
-identifier :: Parser String
-identifier = token $ (:) <$> satisfy isAlpha <*> many (satisfy isAlphaNum)
+symbol :: String -> Parser String
+symbol = lexeme . string
 
-integer :: Parser Int
-integer = token $ read <$> some (satisfy isDigit)
-
--- Reserved words
 reservedWords :: [String]
-reservedWords =
-  [ "let",
-    "in",
-    "cons",
-    "head",
-    "tail",
-    "isEmpty",
-    "True",
-    "False",
-    "if",
-    "then",
-    "else" -- Added if/then/else
-  ]
+reservedWords = ["let", "in", "cons", "head", "tail", "isEmpty", "True", "False", "if", "then", "else"]
 
--- Expression Parsers
-parseVar :: Parser Expr
-parseVar = do
-  name <- identifier
-  if name `elem` reservedWords
-    then empty -- Fail if the identifier is a reserved word
-    else return $ Var name
+keyword :: String -> Parser ()
+keyword word = lexeme $ attempt $ do
+  _ <- string word
+  Parser $ \s -> case remaining s of
+    c : _ | isAlphaNum c -> runParser (expected ("boundary after " ++ word)) s
+    _ -> Parsed () s
 
-parseNum :: Parser Expr
-parseNum = Num <$> integer
+identifier :: Parser String
+identifier = lexeme $ do
+  name <- (:) <$> satisfy "identifier" isAlpha <*> many (satisfy "identifier character" isAlphaNum)
+  if name `elem` reservedWords then expected "non-reserved identifier" else pure name
 
-parseBool :: Parser Expr
-parseBool = BoolLit <$> (True <$ token (string "True") <|> False <$ token (string "False"))
+located :: Parser Expr -> Parser Expr
+located p = Parser $ \s -> case runParser p s of
+  Parsed e s' -> Parsed (At (SourceSpan (position s) (position s')) e) s'
+  Failed committed d -> Failed committed d
 
--- Parses one or more arguments for a lambda, creating nested Lambdas
-parseLambda :: Parser Expr
-parseLambda = do
-  _ <- token $ char '\\' <|> char 'λ' -- Allow both \ and λ
-  vars <- some identifier -- Parse one or more variable names
-  _ <- token $ string "->"
-  body <- parseExpr -- Recursively parse the body
-  -- Fold the variables into nested Lam structures
-  return $ foldr Lam body vars
+withDepth :: Parser a -> Parser a
+withDepth p = Parser $ \s ->
+  if nesting s >= 1000 then Failed True (Diagnostic "limit.parse-depth" "Parser nesting limit exceeded" (SourceSpan (position s) (advance (position s) ' ')))
+  else case runParser p s {nesting = nesting s + 1} of
+    Parsed value s' -> Parsed value s' {nesting = nesting s}
+    Failed committed d -> Failed committed d
 
-parseList :: Parser Expr
-parseList = do
-  _ <- token $ char '['
-  exprs <- parseExpr `sepBy` (token $ char ',') -- Use token for separator
-  _ <- token $ char ']'
-  return $ List exprs
+parseExpr :: Parser Expr
+parseExpr = withDepth $ located (parseIf <|> parseLet <|> parseLambda <|> parseEq)
 
--- Helper for separated lists
-sepBy :: Parser a -> Parser sep -> Parser [a]
-sepBy p sep = ((:) <$> p <*> many (sep *> p)) <|> pure []
+parseIf :: Parser Expr
+parseIf = IfThenElse <$> (keyword "if" *> parseExpr)
+  <*> (keyword "then" *> parseExpr) <*> (keyword "else" *> parseExpr)
 
 parseLet :: Parser Expr
-parseLet = do
-  _ <- token $ string "let"
-  var <- identifier
-  _ <- token $ char '='
-  boundExpr <- parseExpr
-  _ <- token $ string "in"
-  bodyExpr <- parseExpr
-  return $ Let var boundExpr bodyExpr
+parseLet = Let <$> (keyword "let" *> identifier)
+  <*> (assignment *> parseExpr) <*> (keyword "in" *> parseExpr)
 
--- Parsers for built-in list functions using keywords for dedicated AST nodes:
-parseConsKeyword :: Parser Expr
-parseConsKeyword = do
-  _ <- token $ string "cons"
-  arg1 <- parseAtom
-  arg2 <- parseAtom
-  return $ Cons arg1 arg2
+parseLambda :: Parser Expr
+parseLambda = do
+  _ <- lexeme (char '\\' <|> char 'λ')
+  names <- some identifier
+  _ <- symbol "->"
+  body <- parseExpr
+  pure (foldr Lam body names)
 
-parseHeadKeyword :: Parser Expr
-parseHeadKeyword = do
-  _ <- token $ string "head"
-  arg <- parseAtom
-  return $ Head arg
-
-parseTailKeyword :: Parser Expr
-parseTailKeyword = do
-  _ <- token $ string "tail"
-  arg <- parseAtom
-  return $ Tail arg
-
-parseIsEmptyKeyword :: Parser Expr
-parseIsEmptyKeyword = do
-  _ <- token $ string "isEmpty"
-  arg <- parseAtom
-  return $ IsEmpty arg
-
--- Parenthesized expressions
-parseParen :: Parser Expr
-parseParen = token (char '(') *> parseExpr <* token (char ')')
-
--- Basic building block (atom)
 parseAtom :: Parser Expr
-parseAtom =
-  parseNum
-    <|> parseBool
-    <|> parseVar
-    <|> parseLambda -- Multi-arg lambda included
-    <|> parseList
-    -- <|> parseLet -- Let is not usually an atom, move higher
-    <|> parseConsKeyword -- Use keyword parsers
-    <|> parseHeadKeyword
-    <|> parseTailKeyword
-    <|> parseIsEmptyKeyword
-    <|> parseParen
-
--- Application (left-associative)
-parseApp :: Parser Expr
-parseApp = foldl1 App <$> some parseAtom -- Application is just atoms next to each other
-
--- Operator Precedence using chainl1
-chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
-chainl1 p op = p >>= rest
+parseAtom = located $
+      (Num . read <$> lexeme (some (satisfy "digit" (\c -> c >= '0' && c <= '9'))))
+  <|> (BoolLit True <$ keyword "True")
+  <|> (BoolLit False <$ keyword "False")
+  <|> (Cons <$> (keyword "cons" *> withDepth parseAtom) <*> withDepth parseAtom)
+  <|> (Head <$> (keyword "head" *> withDepth parseAtom))
+  <|> (Tail <$> (keyword "tail" *> withDepth parseAtom))
+  <|> (IsEmpty <$> (keyword "isEmpty" *> withDepth parseAtom))
+  <|> parseLambda
+  <|> (List <$> (symbol "[" *> separated parseExpr <* symbol "]"))
+  <|> (symbol "(" *> parseExpr <* symbol ")")
+  <|> (Var <$> attempt identifier)
   where
-    rest x = (do f <- op; y <- p; rest (f x y)) <|> return x
+    separated p = ((:) <$> p <*> many (symbol "," *> p)) <|> pure []
 
--- Equality check (lowest operator precedence before if/let/lambda)
-parseEq :: Parser Expr
-parseEq = chainl1 parseAddSub (token (string "==") *> pure Eq)
+chainLeft :: Parser Expr -> Parser (Expr -> Expr -> Expr) -> Parser Expr
+chainLeft term op = do
+  first <- term
+  rest first
+  where
+    rest left = (do f <- op; right <- term; rest (f left right)) <|> pure left
 
--- Multiplication (higher precedence)
-parseMul :: Parser Expr
-parseMul = chainl1 parseApp (token (char '*') *> pure Mul)
+parseEq, parseAddSub, parseMul, parseApp :: Parser Expr
+parseEq = chainLeft parseAddSub (Eq <$ symbol "==")
+parseAddSub = chainLeft parseMul ((Add <$ symbol "+") <|> (Sub <$ symbol "-"))
+parseMul = chainLeft parseApp (Mul <$ symbol "*")
+parseApp = foldl1 App <$> some parseAtom
 
--- Addition/Subtraction (medium precedence)
-parseAddSub :: Parser Expr
-parseAddSub =
-  chainl1 parseMul $
-    (token (char '+') *> pure Add) <|> (token (char '-') *> pure Sub)
+assignment :: Parser ()
+assignment = lexeme $ attempt $ do
+  _ <- char '='
+  Parser $ \s -> case remaining s of
+    '=' : _ -> runParser (expected "single = in definition") s
+    _ -> Parsed () s
 
--- If-Then-Else parser
-parseIf :: Parser Expr
-parseIf = do
-  _ <- token $ string "if"
-  cond <- parseExpr -- Parse condition
-  _ <- token $ string "then"
-  thenBranch <- parseExpr -- Parse then branch
-  _ <- token $ string "else"
-  elseBranch <- parseExpr -- Parse else branch
-  return $ IfThenElse cond thenBranch elseBranch
+eof :: Parser ()
+eof = Parser $ \s -> case remaining s of
+  [] -> Parsed () s
+  _ -> runParser (expected "end of statement") s
 
--- Top-level expression parser: handles let, lambda, if, and falls back to operators/atoms
-parseExpr :: Parser Expr
-parseExpr =
-  parseIf -- Try parsing 'if' first
-    <|> parseLet -- Try 'let'
-    <|> parseLambda -- Try lambda (already handled in atom, but could be here too)
-    <|> parseEq -- Then equality and other operators
-
--- Parser for top-level definitions ( name = expression )
--- Consumes the whole line if it matches this pattern.
 parseDefinition :: Parser (String, Expr)
-parseDefinition = do
-  name <- identifier
-  _ <- token $ char '='
-  expr <- parseExpr
-  -- Check that there's nothing left on the line after the expression
-  ws -- Consume trailing whitespace if any
-  Parser $ \rest -> if null rest then Just ((name, expr), "") else Nothing
+parseDefinition = (,) <$> attempt (identifier <* assignment) <*> parseExpr <* eof
+
+parseStatement :: Int -> String -> Either Diagnostic (Maybe Statement)
+parseStatement row input = case runParser parser (Cursor input (Position row 1) 0) of
+  Parsed result _ -> Right result
+  Failed _ diagnostic -> Left diagnostic
+  where
+    parser = space *> ((Nothing <$ eof) <|> (Just <$> statement <* eof))
+    statement = (uncurry Definition <$> parseDefinition) <|> (Expression <$> parseExpr)
+
+-- Compatibility entry point for expression-level consumers.
+parse :: Parser a -> String -> Maybe (a, String)
+parse p input = case runParser (space *> p) (Cursor input (Position 1 1) 0) of
+  Parsed a s -> Just (a, remaining s)
+  Failed _ _ -> Nothing

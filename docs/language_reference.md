@@ -1,89 +1,99 @@
-# L Language Reference
+# Language reference
 
-## Syntax
+L is untyped and evaluates arguments before applying functions (call by value).
+Functions capture the environment where they are created, not where they are called.
 
-L Language uses a minimalist syntax heavily inspired by Haskell and Lambda Calculus.
+## Statements and names
 
-### Definitions
+Each statement occupies one line. A statement is a definition (`name = expression`)
+or an expression. Blank lines and `--` line comments are ignored. A statement must
+consume its entire line; multiline expressions are not supported.
 
-Define variables or functions using the `=` operator using the line start.
+Identifiers begin with a letter and continue with letters or digits. Unicode
+letters are supported. Keywords cannot be used as names:
+`let in if then else cons head tail isEmpty True False`.
+Keyword prefixes are ordinary identifiers: `TrueValue`, `letx`, and `headway` are valid.
 
-```haskell
-x = 10
-double = \x -> x * 2
-```
+## Integers and operators
 
-### Anonymous Functions (Lambdas)
+Integers are arbitrary precision. Arithmetic never silently wraps. Literals contain
+ASCII decimal digits. Negative results are supported; write `0 - 5` to express a
+negative number, since unary minus is not part of the grammar.
 
-Functions are defined using the `\` (lambda) character, followed by arguments, `->`, and the body.
-
-```haskell
-\x -> x + 1
-\x y -> x * y  -- Multi-argument lambda
-```
-
-### Conditionals
-
-Standard `if-then-else` expressions.
+From highest to lowest precedence: function application, `*`, `+`/`-`, then `==`.
+Application and binary operators associate to the left. Parentheses override precedence.
 
 ```haskell
-if x == 0 then 1 else 2
+1 + 2 * 3 -- 7
+(1 + 2) * 3 -- 9
+9223372036854775808 * 2 -- 18446744073709551616
 ```
 
-### Lists
+`==` compares integers, Booleans, and lists structurally. Values of different types
+are unequal. Functions are always unequal, including to themselves. Lists containing
+functions follow that rule. This is language equality, not function extensionality.
 
-L supports basic linked lists.
+## Functions and local bindings
 
-- `[]` : Empty list (conceptually). In L, we often check emptiness.
-- `cons head tail` : Construct a list.
-- `head list` : Get the first element.
-- `tail list` : Get the rest of the list.
-- `isEmpty list` : Check if a list is empty.
+Both `\` and `λ` introduce a lambda. Multiple parameters desugar into nested lambdas.
 
-_(Note: The current syntax primarily uses `cons`, `head`, `tail` built-ins rather than `[]` literal syntax for construction in all contexts, though usage patterns may evolve.)_
+```haskell
+add = \x y -> x + y
+addFive = add 5
+addFive 10 -- 15
+let x = 5 in x * 2 -- 10
+```
 
-### Built-in Operations
-
-- **Arithmetic**: `+`, `-`, `*`
-- **Comparison**: `==`
-- **List Ops**: `cons`, `head`, `tail`, `isEmpty`
-
-## Examples
-
-### Factorial
+`let` evaluates its bound expression in the preceding environment; it is not recursive.
+Named top-level definitions whose expression is a lambda can recurse:
 
 ```haskell
 factorial = \n -> if n == 0 then 1 else n * factorial (n - 1)
-factorial 5
--- Result: 120
+factorial 5 -- 120
 ```
 
-### Fibonacci
+Other definitions evaluate against the preceding environment. `x = x` without an
+existing `x` is an undefined-name error, not a self-referential value. Redefining
+`x = x + 1` uses the preceding `x`. Existing closures retain captured bindings.
+Mutually recursive definition groups and recursive local `let` are not supported.
+
+## Booleans and lists
+
+Conditions must be `True` or `False`. Only the selected branch is evaluated.
+Lists may contain different value types and use commas between elements.
 
 ```haskell
-fib = \n -> if n == 0 then 0 else if n == 1 then 1 else fib (n - 1) + fib (n - 2)
-fib 10
--- Result: 55
+if True then 1 else missing -- 1
+[1, True, []]
+cons 1 [2, 3] -- [1, 2, 3]
+head [1, 2] -- 1
+tail [1, 2] -- [2]
+isEmpty [] -- True
 ```
 
-### Map
+`head []` and `tail []` produce runtime errors. List operations reject non-list
+arguments. Built-in list operators are dedicated syntax, not first-class functions;
+wrap one in a lambda when passing it as an argument.
 
-Creating a higher-order `map` function to apply a function to a list.
+## Errors, state, and limits
 
-```haskell
-map = \f xs -> if isEmpty xs then [] else cons (f (head xs)) (map f (tail xs))
+Evaluation stops at the first error, retaining preceding outputs and definitions.
+A failed definition does not replace an existing binding. Diagnostics include a code,
+a message, and a source span with one-based lines and UTF-16 columns (matching
+Monaco), with an exclusive end.
 
--- Usage
-let myList = cons 1 (cons 2 (cons 3 []))
-in map (\x -> x * 2) myList
-```
+The browser starts fresh for each Run. The REPL persists successful definitions
+and offers `:env`, `:trace`, `:examples`, `:load <name>`, `:help`, and `:quit`.
+`:load` runs a bundled example, not an arbitrary file.
 
-_(Requires `[]` literal support or definition of `nil` in environment)_
+Each submitted program defaults to 100,000 expression evaluations and a nesting
+limit of 1,000. Parser nesting is also limited to 1,000. Tracing defaults to at most
+2,000 entries of 512 characters each; truncation is reported and does not stop
+execution. Library callers can configure evaluator limits and disable tracing.
 
-### Recursive Let
+HTTP evaluation also has a five-second deadline that includes response serialization,
+a 65,536-character source limit, and a 256 KiB request-body limit. Limits are
+practical guardrails for a learning tool, not process-level CPU or memory isolation.
 
-You can use `let` for local bindings. Recursive `let` is supported in definitions.
-
-```haskell
-let x = 5 in x * 2
-```
+The [shared examples](../examples/programs.json) contain expected results checked
+by the test suite. Their syntax is authoritative for the playground examples too.

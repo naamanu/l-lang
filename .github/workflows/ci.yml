@@ -1,0 +1,51 @@
+name: Verify
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.8.4'
+          enable-stack: true
+          stack-version: '3.11.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.stack
+            .stack-work
+          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'package.yaml') }}
+      - run: stack build --system-ghc --ghc-options=-Werror
+      - run: stack test --system-ghc --ghc-options=-Werror
+      - name: Verify failing assertions fail the command
+        run: |
+          if stack test --system-ghc --test-arguments=--prove-failure > runner-check.log 2>&1; then
+            cat runner-check.log
+            exit 1
+          fi
+          grep -q 'intentional runner verification' runner-check.log
+      - run: git diff --exit-code -- l-lang.cabal
+      - run: npm ci
+        working-directory: web-client
+      - run: npm run lint && npm run test:unit && npm run build
+        working-directory: web-client
+      - run: npx playwright install --with-deps chromium
+        working-directory: web-client
+      - run: npm test
+        working-directory: web-client
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failures
+          path: web-client/test-results/
+          if-no-files-found: ignore

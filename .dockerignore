@@ -1,0 +1,7 @@
+.git
+.stack-work
+dist-newstyle
+web-client/node_modules
+web-client/dist
+web-client/test-results
+web-client/playwright-report

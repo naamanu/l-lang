@@ -1,76 +1,34 @@
 # Contributing to L
 
-Thanks for your interest in contributing.
+L is a small language implementation. Keep changes explainable through a language
+rule, an executable example, and a test of observable behavior.
 
-L is a minimalist untyped functional language inspired by the lambda calculus. It is a
-small codebase on purpose — six modules — so most contributions touch one or two files.
+Read the [language reference](docs/language_reference.md) and
+[architecture](docs/architecture.md) before changing syntax or evaluation.
 
-## Prerequisites
+## Development
 
-- [Stack](https://docs.haskellstack.org/) (it installs the right GHC for you)
-- `alex` and `happy` — declared as build tools, so Stack fetches them
+Use Stack and Node.js 22. See the [development guide](docs/getting_started.md)
+for setup and the complete verification commands. CI checks Haskell with warnings
+as errors, frontend lint/build, unit tests, and real-server browser tests.
 
-## Getting started
+`package.yaml` is the Haskell manifest source. Stack regenerates `l-lang.cabal`;
+commit both when changing the manifest. Keep testing libraries in the test component.
+Do not suppress warnings globally or introduce a second interpreter in the UI.
 
-```bash
-git clone https://github.com/your-username/l-lang.git
-cd l-lang
-stack build
-stack test
-```
+For a behavior change:
 
-Run the REPL, or the web playground on http://localhost:3000:
+1. Add a regression in `test/Spec.hs` or the relevant frontend tests.
+2. Update `examples/programs.json` when an example should demonstrate the change.
+3. Update the language reference and changelog.
+4. Run the affected checks, then the full integration suite for interface changes.
 
-```bash
-stack run              # REPL
-stack run -- -w        # web playground
-```
+For parser changes, test valid programs as well as malformed input, keyword
+boundaries, source positions, and full consumption. For evaluator changes, include
+scope, evaluation order, recursion, and error behavior. Test observable outcomes
+rather than exact incidental trace formatting.
 
-`make build`, `make run`, and `make clean` wrap the same commands. Docker is also
-supported via `docker-compose.yml`.
+Open a pull request with the problem, resulting behavior, and verification results.
+Do not include build caches, node_modules, or generated frontend assets.
 
-## Project structure
-
-```
-src/Parser.hs      # Parsec-based parser
-src/Ast.hs         # Syntax tree
-src/Evaluator.hs   # Evaluation
-src/Value.hs       # Runtime values
-src/Lib.hs         # Library entry point, Scotty web server
-app/Main.hs        # CLI entry point (REPL / -w playground)
-test/Spec.hs       # hspec + QuickCheck suite
-web-client/        # Playground front end
-```
-
-## Before you open a PR
-
-```bash
-stack build
-stack test
-```
-
-`ghc-options` enables `-Wall` plus a strict set of extra warnings
-(`-Wincomplete-uni-patterns`, `-Wmissing-export-lists`, and others). Please don't add
-new warnings; a warning-free build is the bar.
-
-## Making changes
-
-1. Branch off `main`: `git checkout -b feat/your-change`
-2. Add a test in `test/Spec.hs`. The suite has hspec, QuickCheck, and HUnit available —
-   QuickCheck properties are especially welcome for parser and evaluator work.
-3. If you add syntax, add an example to the README and to `test.l`.
-4. Note behaviour changes in `CHANGELOG.md`.
-5. Open a PR against `main`, linking any related issue.
-
-## Reporting issues
-
-Please include:
-
-- The L program that reproduces it (as small as you can make it)
-- Whether it happened in the REPL or the web playground
-- Expected vs actual result
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the
-BSD-3-Clause License.
+Contributions are licensed under BSD-3-Clause.

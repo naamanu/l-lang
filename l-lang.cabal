@@ -1,12 +1,13 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
 name:           l-lang
-version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/naamanu/l-lang#readme>
+version:        0.2.0.0
+synopsis:       A small, traceable functional language
+description:    See README.md for the language and supported workflows.
 homepage:       https://github.com/naamanu/l-lang#readme
 bug-reports:    https://github.com/naamanu/l-lang/issues
 author:         Nana Adjei Manu
@@ -18,6 +19,12 @@ build-type:     Simple
 extra-source-files:
     README.md
     CHANGELOG.md
+    docs/_sidebar.md
+    docs/architecture.md
+    docs/getting_started.md
+    docs/language_reference.md
+data-files:
+    examples/programs.json
 
 source-repository head
   type: git
@@ -26,10 +33,14 @@ source-repository head
 library
   exposed-modules:
       Ast
+      Diagnostic
       Evaluator
+      Examples
       Lib
       Parser
+      Program
       Value
+      Web
   other-modules:
       Paths_l_lang
   autogen-modules:
@@ -37,25 +48,14 @@ library
   hs-source-dirs:
       src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
-  build-tools:
-      alex
-    , happy
   build-depends:
-      HUnit
-    , QuickCheck
-    , aeson
-    , array
-    , base >=4.7 && <5
+      aeson
+    , base >=4.19 && <5
     , containers
     , directory
     , filepath
-    , hspec
-    , parsec
     , scotty
     , text
-    , vector
-    , wai-cors
-    , wai-extra
   default-language: Haskell2010
 
 executable l-lang-exe
@@ -68,22 +68,9 @@ executable l-lang-exe
       app
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      HUnit
-    , QuickCheck
-    , aeson
-    , array
-    , base >=4.7 && <5
+      base >=4.19 && <5
     , containers
-    , directory
-    , filepath
-    , hspec
     , l-lang
-    , parsec
-    , scotty
-    , text
-    , vector
-    , wai-cors
-    , wai-extra
   default-language: Haskell2010
 
 test-suite l-lang-test
@@ -100,17 +87,8 @@ test-suite l-lang-test
       HUnit
     , QuickCheck
     , aeson
-    , array
-    , base >=4.7 && <5
+    , base >=4.19 && <5
     , containers
-    , directory
-    , filepath
-    , hspec
     , l-lang
-    , parsec
-    , scotty
     , text
-    , vector
-    , wai-cors
-    , wai-extra
   default-language: Haskell2010

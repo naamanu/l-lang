@@ -1,0 +1,72 @@
+[
+  {
+    "id": "arithmetic",
+    "title": "Basic Arithmetic",
+    "description": "Integer arithmetic and precedence",
+    "code": "x = 10\ny = 20\nx + y * 2",
+    "expected": "50"
+  },
+  {
+    "id": "closures",
+    "title": "Lexical Closures",
+    "description": "Functions capture the environment where they are defined",
+    "code": "x = 10\naddX = \\y -> x + y\nx = 99\naddX 5",
+    "expected": "15"
+  },
+  {
+    "id": "currying",
+    "title": "Curried Functions",
+    "description": "Functions return functions",
+    "code": "add = \\x y -> x + y\naddFive = add 5\naddFive 10",
+    "expected": "15"
+  },
+  {
+    "id": "composition",
+    "title": "Function Composition",
+    "description": "Pass and return functions",
+    "code": "compose = \\f g x -> f (g x)\ndouble = \\x -> x * 2\nsquare = \\x -> x * x\ncompose double square 5",
+    "expected": "50"
+  },
+  {
+    "id": "factorial",
+    "title": "Recursive Factorial",
+    "description": "A named function can call itself",
+    "code": "factorial = \\n -> if n == 0 then 1 else n * factorial (n - 1)\nfactorial 5",
+    "expected": "120"
+  },
+  {
+    "id": "fibonacci",
+    "title": "Fibonacci",
+    "description": "Recursive evaluation with two branches",
+    "code": "fib = \\n -> if n == 0 then 0 else if n == 1 then 1 else fib (n - 1) + fib (n - 2)\nfib 8",
+    "expected": "21"
+  },
+  {
+    "id": "map",
+    "title": "Map a List",
+    "description": "Recursion over a list and a function argument",
+    "code": "map = \\f xs -> if isEmpty xs then [] else cons (f (head xs)) (map f (tail xs))\nmap (\\x -> x * 2) [1, 2, 3, 4]",
+    "expected": "[2, 4, 6, 8]"
+  },
+  {
+    "id": "foldr",
+    "title": "Fold a List",
+    "description": "Reduce a list using a supplied operation",
+    "code": "foldr = \\f acc xs -> if isEmpty xs then acc else f (head xs) (foldr f acc (tail xs))\nfoldr (\\x y -> x + y) 0 [1, 2, 3, 4]",
+    "expected": "10"
+  },
+  {
+    "id": "reverse",
+    "title": "Reverse a List",
+    "description": "Two named recursive helpers",
+    "code": "append = \\a b -> if isEmpty a then b else cons (head a) (append (tail a) b)\nreverse = \\xs -> if isEmpty xs then [] else append (reverse (tail xs)) [head xs]\nreverse [1, 2, 3]",
+    "expected": "[3, 2, 1]"
+  },
+  {
+    "id": "integers",
+    "title": "Exact Integers",
+    "description": "Integers remain exact in the browser",
+    "code": "large = 9223372036854775808\nlarge * large",
+    "expected": "85070591730234615865843651857942052864"
+  }
+]

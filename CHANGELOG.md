@@ -1,11 +1,16 @@
-# Changelog for `l-lang`
+# Changelog
 
-All notable changes to this project will be documented in this file.
+## 0.2.0.0 — Unreleased
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to the
-[Haskell Package Versioning Policy](https://pvp.haskell.org/).
+- Share program execution between the REPL and HTTP server; isolate every browser run.
+- Preserve earlier successful statements on failure; restrict recursive binding to named lambdas.
+- Use exact integers and decimal-string JSON environment values (an API representation change).
+- Fix keyword boundaries and reserved binders; add comments and positioned diagnostics.
+- Bound evaluation depth, steps, trace output, request size, and HTTP evaluation duration.
+- Serve one React playground with a locally bundled editor; remove mock and duplicate interfaces.
+- Use shared executable examples and add semantic, property, HTTP, and browser tests with CI.
+- Fix failing-test exit status and remove blanket warning suppression and unused dependencies.
 
-## Unreleased
+## 0.1.0.0
 
-## 0.1.0.0 - YYYY-MM-DD
+Initial interpreter, REPL, and playground.

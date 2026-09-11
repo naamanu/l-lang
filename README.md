@@ -1,40 +1,71 @@
-# L Language
+# L
 
-**L** is a minimalist untyped functional programming language inspired by lambda calculus, designed for evaluating mathematical expressions and recursive functions.
+L is a small, untyped functional language implemented in Haskell. Its handwritten
+parser and environment-based evaluator make lexical closures, currying, and
+recursion visible through bounded evaluation traces.
 
-![L Language Playground](docs/screenshot.png)
-
-## 🚀 Quick Start
-
-### 1. Run the Web Playground
-
-Experience L in a modern, interactive web interface.
-
-```bash
-stack run -- -w
+```haskell
+factorial = \n -> if n == 0 then 1 else n * factorial (n - 1)
+factorial 5
+-- 120
 ```
 
-Open **[http://localhost:3000](http://localhost:3000)** in your browser.
+## Run it
 
-### 2. Run the CLI REPL
+Install [Stack](https://docs.haskellstack.org/en/stable/install_and_upgrade/).
+The repository pins GHC 9.8.4 through LTS 23.10.
 
-Use the interactive command-line interface.
-
-```bash
+```sh
+stack build
 stack run -- -r
 ```
 
-## 📚 Documentation
+For the React playground, also install Node.js 22 and build its assets:
 
-Detailed documentation is available in the `docs/` directory:
+```sh
+npm --prefix web-client ci
+npm --prefix web-client run build
+stack run -- -w
+```
 
-- **[Getting Started](docs/getting_started.md)**: Installation, building, and running instructions.
-- **[Language Reference](docs/language_reference.md)**: Syntax, built-in functions, and examples.
-- **[Architecture Guide](docs/architecture.md)**: Overview of the codebase and project structure.
+Open **http://localhost:3000**. Haskell serves both the playground and its API.
+Every browser Run evaluates the complete editor contents from a fresh environment.
+The CLI REPL keeps definitions between commands. Monaco is bundled locally.
 
-## 🌟 Key Features
+```sh
+docker compose up --build
+```
 
-- **Lambda Calculus Core**: First-class functions, recursion, and higher-order functions.
-- **Simple Syntax**: Minimalist and easy to learn (similar to Haskell/ML).
-- **Interactive Tools**: Built-in CLI REPL and Web Playground with execution tracing.
-- **Traceable Execution**: See step-by-step evaluation of your code.
+Docker runs the same playground and interpreter at port 3000.
+
+## What the language supports
+
+- Exact integers; `+`, `-`, `*`, and structural equality with `==`.
+- Lexically scoped functions, multiple arguments through currying, and recursive
+  named lambda definitions.
+- Nonrecursive `let`, Boolean conditionals, lists, and list operations.
+- Source-position diagnostics and optional, bounded evaluation traces.
+
+Statements occupy one line; blank lines and `--` comments are allowed. There is
+no type checker, compiler, division, list comprehension, or alternate browser
+interpreter. See the [language reference](docs/language_reference.md).
+
+## Check it
+
+```sh
+stack build --ghc-options=-Werror
+stack test --ghc-options=-Werror
+npm --prefix web-client run lint
+npm --prefix web-client run test:unit
+npm --prefix web-client run build
+cd web-client
+npx playwright install chromium
+npm test
+```
+
+Browser tests start their own Haskell server; leave port 3107 available.
+[Executable examples](examples/programs.json) are shared by the playground and
+Haskell tests. CI checks the examples, semantics, HTTP isolation, and browser flows.
+
+Read the [architecture](docs/architecture.md), [development guide](docs/getting_started.md),
+and [contribution guide](CONTRIBUTING.md) for implementation details.

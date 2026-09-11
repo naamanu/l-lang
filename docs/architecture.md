@@ -1,58 +1,83 @@
-# Architecture Guide
+# Architecture
 
-The L Language project consists of a Haskell-based interpreter and a web interface.
+## One language implementation
 
-## Implementation Overview
+The React playground and CLI both use the Haskell program runner. The browser has
+no alternate evaluator and never substitutes mock results when a request fails.
 
-### 1. Core Interpreter (`src/`)
+```text
+source text → Parser → Statement / located Expr → Program → Evaluator → Value
+                                                   │          │
+                                                   └─ diagnostic, steps, trace
+```
 
-The core logic resides in `src/` and is pure Haskell.
+- **Parser** implements combinators directly. Its cursor tracks position and
+  nesting. Failures record whether input was committed; lexical lookahead can
+  backtrack, but a malformed committed expression cannot become a valid prefix.
+  Alternative failures retain the furthest diagnostic. Each statement requires EOF.
+- **Ast / Diagnostic** describe located syntax and structured failures. AST display
+  strips location wrappers; diagnostics retain them.
+- **Value / Evaluator** implement lexical environments, closures, exact integers,
+  and call-by-value evaluation. Evaluation state carries strict counters and a
+  bounded reverse trace that survives errors. Disabled tracing skips rendering.
+- **Program / Lib** expose `runProgram :: EvalOptions -> Env -> String -> RunResult`.
+  Statements run in order with one shared evaluation budget. Only successful
+  statements update the environment; earlier results survive later failures.
+- **Web** adapts a fresh program run to JSON. The timeout forces the serialized
+  response, not just a lazy result constructor. Function environments never enter JSON.
+- **Main** selects web or REPL mode and owns the REPL environment. **Examples** loads
+  the same packaged JSON fixtures used by React and tests.
 
-- **`Parser.hs`**:
+Top-level named lambda definitions tie a lazy captured environment containing their
+own closure. Arbitrary expressions do not participate in that recursive binding.
+Local `let` is nonrecursive. The core parser/evaluator/program modules have no HTTP
+or JSON imports; transport representations belong to Web.
 
-  - Uses monadic parser combinators (custom implementation similar to Parsec/Megaparsec).
-  - Parses raw strings into an Abstract Syntax Tree (AST).
-  - Key types: `Parser a`, `Expr` (AST).
+## HTTP interface
 
-- **`Ast.hs`**:
+`POST /evaluate` accepts UTF-8 source as `text/plain` and returns:
 
-  - Defines the `Expr` data type representing language constructs (Var, App, Lam, Let, If, etc.).
+```json
+{
+  "steps": [{"output": "42", "ast": "Add (Num 40) (Num 2)"}],
+  "finalError": null,
+  "diagnostic": null,
+  "finalEnvironment": {},
+  "traceLog": [],
+  "traceTruncated": false,
+  "evaluations": 3
+}
+```
 
-- **`Evaluator.hs`**:
-  - Implements the evaluation logic using a standard substitution model or environment-based evaluation.
-  - **Traceable**: The `eval` function returns not just the result, but a `TraceLog` (list of strings) documenting every step.
-  - **Environment**: Manages variable scopes (`Env` map).
-  - **Values**: Defines runtime values `Value` (Closures, Numbers, Booleans).
+`finalError` is a display string retained for compatibility. `diagnostic` is either
+null or `{code, message, span: {start: {line, column}, end: {line, column}}}`.
+The trace in the example is omitted for brevity; normal HTTP runs enable it.
 
-### 2. Application Layer (`app/`)
+Environment integers are always decimal **strings**, including inside lists.
+Booleans remain JSON Booleans, lists remain arrays, and functions appear as
+`"<closure>"`. This avoids JavaScript numeric rounding and recursive environment
+serialization. This representation changes numeric environment values from v0.1.
 
-- **`Main.hs`**: The entry point.
-  - Parses command line arguments (`-r` for REPL, `-w` for Web).
-  - **CLI REPL**: Handles standard input/output, maintains loop state.
-  - **Web Server**: Uses **Scotty** (a Haskell web framework) to serve:
-    - Static files (`static/index.html`, `static/script.js`).
-    - API endpoint `POST /evaluate` which accepts code, runs the interpreter, and returns JSON containing results, AST, and trace logs.
+Language, encoding, and evaluation-limit errors use the same JSON envelope with
+HTTP 200; request-body rejection is handled by Scotty as HTTP 413. Clients must
+inspect `finalError`, not only the HTTP status. A deadline or source-size failure
+returns an empty result because a completed result is unavailable.
 
-### 3. Frontend (`static/`)
+## Browser and deployment
 
-A lightweight, vanilla JS + Tailwind CSS frontend served by the Haskell app.
+React validates the response at its network boundary, then displays outputs,
+ASTs, traces, environment values, and Monaco markers. The client deadline includes
+body parsing. Every new run clears old results. Network failure is visible and
+retryable. Source sharing uses UTF-8 and URL-encoded base64.
 
-- **`index.html`**: The single-page application structure.
-- **`script.js`**: Fetches evaluation results from the backend and renders them to the DOM.
+Haskell serves `web-client/dist` with explicit asset MIME types. Development uses
+a Vite `/evaluate` proxy to the same server. Docker builds React and Haskell, then
+runs one service. There is no server-side session store or shared global environment.
 
-## Data Flow (Web)
+## Verification
 
-1.  User types code in Browser.
-2.  `POST /evaluate` -> Haskell Server.
-3.  Server parses code (lines).
-4.  Server evaluates code sequentially, accumulating environment changes.
-5.  Server returns JSON:
-    ```json
-    {
-      "finalEnvironment": {...},
-      "steps": [{ "output": "...", "ast": "..." }],
-      "traceLog": ["Eval ...", "Apply ..."],
-      "finalError": null
-    }
-    ```
-6.  Frontend renders JSON data to the UI.
+HUnit covers language behavior, diagnostics, state, budgets, and HTTP serialization.
+QuickCheck checks arithmetic and whitespace invariants. Shared example fixtures
+are checked against their expected output. Node tests cover the frontend boundary,
+including a stalled body; Playwright exercises the actual backend and browser.
+The test runner exits nonzero on failed assertions or properties.

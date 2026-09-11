@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import Editor from "@monaco-editor/react";
+import type { OnMount } from "@monaco-editor/react";
 import {
   AlertCircle,
   CheckCircle,
@@ -17,14 +17,15 @@ import {
   Share,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { mockEvaluate, isStandaloneMode } from "./services/mock-api";
+import { evaluateCode as requestEvaluation, type Diagnostic, type RuntimeValue, type StepResult } from "./services/api";
 import { sampleSnippets } from "./data/sample-snippets";
+
+const Editor = lazy(() => import('./components/CodeEditor'));
 
 export type Snippet = { title: string; code: string };
 
-type Result = { ast: string; output: string };
 
 interface LintError {
   type: "error" | "warning";
@@ -34,14 +35,35 @@ interface LintError {
 
 export default function App() {
   const [code, setCode] = useState<string>("");
-  const [result, setSteps] = useState<Array<Result>>([]);
-  const [env, setEnv] = useState({});
+  const [result, setSteps] = useState<StepResult[]>([]);
+  const [env, setEnv] = useState<Record<string, RuntimeValue>>({});
   const [error, setError] = useState<string>("");
   const [snippets, setSnippets] = useState<Array<Snippet>>([]);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [errors, setErrors] = useState<Array<LintError>>([]);
   const [showSnippets, setShowSnippets] = useState(false);
-  const [evalLogs, setEvalLogs] = useState([]);
+  const [evalLogs, setEvalLogs] = useState<string[]>([]);
+  const [diagnostic, setDiagnostic] = useState<Diagnostic | null>(null);
+  const [traceTruncated, setTraceTruncated] = useState(false);
+  const [editorReady, setEditorReady] = useState(false);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
+  const activeRequest = useRef<AbortController | null>(null);
+
+  useEffect(() => () => activeRequest.current?.abort(), []);
+  useEffect(() => {
+    const model = editorRef.current?.getModel();
+    const monaco = monacoRef.current;
+    if (!model || !monaco) return;
+    monaco.editor.setModelMarkers(model, 'l-lang', diagnostic ? [{
+      severity: monaco.MarkerSeverity.Error,
+      message: diagnostic.message,
+      startLineNumber: diagnostic.span.start.line,
+      startColumn: diagnostic.span.start.column,
+      endLineNumber: diagnostic.span.end.line,
+      endColumn: diagnostic.span.end.column,
+    }] : []);
+  }, [diagnostic, editorReady]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -49,7 +71,7 @@ export default function App() {
 
     if (encodedCode) {
       try {
-        const decodedCode = atob(encodedCode);
+        const decodedCode = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(atob(encodedCode), c => c.charCodeAt(0)));
         setCode(decodedCode);
         toast.success("Code loaded from share link!", {
           description: "Successfully loaded shared code",
@@ -70,14 +92,21 @@ export default function App() {
     const snips = window.localStorage.getItem("snippets");
     if (!snips) {
       // Load sample snippets if no saved snippets exist
-      const initialSnippets = sampleSnippets.slice(0, 3).map(sample => ({
+      const initialSnippets = sampleSnippets.map(sample => ({
         title: sample.title,
         code: sample.code
       }));
       setSnippets(initialSnippets);
       window.localStorage.setItem("snippets", JSON.stringify(initialSnippets));
     } else {
-      setSnippets(JSON.parse(snips));
+      try {
+        const saved: unknown = JSON.parse(snips);
+        if (!Array.isArray(saved) || !saved.every(item => item && typeof item.title === 'string' && typeof item.code === 'string')) throw new Error('Invalid snippets');
+        setSnippets(saved);
+      } catch {
+        setSnippets(sampleSnippets.map(({ title, code }) => ({ title, code })));
+        toast.error('Saved snippets could not be read. Showing the examples instead.');
+      }
     }
   }, []);
 
@@ -93,133 +122,37 @@ export default function App() {
   }, [error]);
 
   const evaluateCode = async () => {
-    if (!code.trim()) {
-      toast.warning("No code to evaluate", {
-        description: "Please write some code before running",
-        duration: 2000,
-      });
-      return;
-    }
-
+    if (!code.trim() || activeRequest.current) return;
+    const controller = new AbortController();
+    activeRequest.current = controller;
     setIsEvaluating(true);
     setError("");
-
-    let timeoutId: NodeJS.Timeout | undefined;
-    
+    setDiagnostic(null);
+    setSteps([]);
+    setEnv({});
+    setEvalLogs([]);
+    setTraceTruncated(false);
     try {
-      if (isStandaloneMode()) {
-        toast.loading("Evaluating code...", {
-          id: "evaluation",
-          description: "Running L language interpreter (offline mode)",
-        });
-
-        const result = await mockEvaluate(code);
-        setEnv({});
-        setSteps([result]);
-        setError("");
-
-        toast.success("Code evaluated successfully", {
-          id: "evaluation",
-          description: "L language code executed in offline mode",
-          duration: 2000,
-        });
-      } else {
-        toast.loading("Evaluating code...", {
-          id: "evaluation",
-          description: "Sending code to L language server",
-        });
-
-        const controller = new AbortController();
-        const signal = controller.signal;
-
-        timeoutId = setTimeout(() => {
-          controller.abort();
-        }, 5000);
-
-        const res = await fetch("http://localhost:3000/evaluate", {
-          method: "post",
-          body: code,
-          signal: signal,
-          headers: {
-            "Content-Type": "text/plain;charset=UTF-8",
-          },
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!res.ok) {
-          let errorMsg = `Server error: ${res.status} ${res.statusText}`;
-          try {
-            const errorBody = await res.text();
-            if (errorBody) {
-              errorMsg = `${errorMsg} - ${errorBody}`;
-            }
-          } catch {
-            // Ignore error while reading error body
-          }
-          setError(errorMsg);
-          setEnv({});
-          setSteps([]);
-
-          toast.error("Evaluation failed", {
-            id: "evaluation",
-            description: errorMsg,
-            duration: 4000,
-          });
-          return;
-        }
-
-        const responseData = await res.json();
-
-        setEnv(responseData.finalEnvironment);
-        setSteps(responseData.steps);
-        setError(responseData.finalError);
-        setEvalLogs(responseData.traceLog);
-
-        if (responseData.finalError) {
-          toast.error("Evaluation completed with errors", {
-            id: "evaluation",
-            description: responseData.finalError,
-            duration: 4000,
-          });
-        } else {
-          toast.success("Code evaluated successfully!", {
-            id: "evaluation",
-            description: `Generated ${responseData.steps?.length || 0} steps`,
-            duration: 3000,
-          });
-        }
-      }
-    } catch (err) {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-
-      if (err instanceof Error && err.name === "AbortError") {
-        const timeoutMsg =
-          "Request timed out: The server did not respond within 5 seconds.";
-        setError(timeoutMsg);
-        toast.error("Evaluation timed out", {
-          id: "evaluation",
-          description: timeoutMsg,
-          duration: 4000,
-        });
-      } else {
-        console.error("Fetch operation failed:", err);
-        const networkMsg =
-          "Failed to communicate with the server or process the response. Please check your network and try again.";
-        setError(networkMsg);
-        toast.error("Network error", {
-          id: "evaluation",
-          description: networkMsg,
-          duration: 4000,
-        });
-      }
-
-      setEnv({});
-      setSteps([]);
+      const response = await requestEvaluation(code, controller.signal);
+      if (controller.signal.aborted) return;
+      setEnv(response.finalEnvironment);
+      setSteps(response.steps);
+      setError(response.finalError ?? "");
+      setDiagnostic(response.diagnostic);
+      setEvalLogs(response.traceLog);
+      setTraceTruncated(response.traceTruncated);
+      if (response.finalError) toast.error("Evaluation stopped", { description: response.finalError });
+      else toast.success("Evaluation complete");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const message = error instanceof Error ? error.message : "Evaluation failed. Please try again.";
+      setError(message);
+      toast.error("Evaluation failed", { description: message });
     } finally {
-      setIsEvaluating(false);
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        if (!controller.signal.aborted) setIsEvaluating(false);
+      }
     }
   };
 
@@ -255,6 +188,7 @@ export default function App() {
   };
 
   const handleSelectSnippet = (title: string) => {
+    if (isEvaluating) return;
     const foundSnippet: Snippet | undefined = snippets.find(
       (s) => s.title === title,
     );
@@ -269,6 +203,7 @@ export default function App() {
   };
 
   const handleAddNewSnippet = () => {
+    if (isEvaluating) return;
     const newSnip: Snippet = { title: String(Date.now()), code: "" };
     const newSnippets = [...snippets, newSnip];
     setCode(newSnip.code);
@@ -303,9 +238,10 @@ export default function App() {
     }
 
     try {
-      const encoded = btoa(code);
-      const url = `${window.location.origin}${window.location.pathname}?code=${encoded}`;
-      await navigator.clipboard.writeText(url);
+      const encoded = btoa(Array.from(new TextEncoder().encode(code), byte => String.fromCharCode(byte)).join(""));
+      const url = new URL(window.location.pathname, window.location.origin);
+      url.searchParams.set("code", encoded);
+      await navigator.clipboard.writeText(url.toString());
 
       toast.success("Share link copied!", {
         description: "Share link has been copied to clipboard",
@@ -386,9 +322,9 @@ export default function App() {
       evalLogs.forEach((step) => {
         output = `${output} ${step}\n`;
       });
-      return output;
+      return output + (traceTruncated ? "\nTrace truncated." : "");
     }
-    return "No evaluation steps available";
+    return traceTruncated ? "Trace truncated." : "No evaluation steps available";
   };
 
   const formatEnvironment = () => {
@@ -402,7 +338,7 @@ export default function App() {
     if (result && result.length > 0) {
       return result.map((step) => step.ast).join("\n\n");
     }
-    return "Compiled AST will appear here...";
+    return "Parsed AST will appear here...";
   };
 
   return (
@@ -529,6 +465,7 @@ export default function App() {
         </div>
       </div>
 
+      {error && <div role="alert" className="bg-red-50 text-red-900 px-4 py-3 border-b border-red-200">{error}</div>}
       <div className="flex-1 flex">
         <div className="w-1/2 border-r border-gray-200 bg-white flex flex-col">
           <div className="border-b border-gray-200 px-4 py-2 bg-gray-50">
@@ -541,12 +478,20 @@ export default function App() {
           </div>
 
           <div className="flex-1 pt-4">
+            <Suspense fallback={<p role="status">Loading editor…</p>}>
             <Editor
+              onMount={(editor, monaco) => {
+                editorRef.current = editor;
+                monacoRef.current = monaco;
+                setEditorReady(true);
+              }}
               value={code}
               onChange={(value) => setCode(value || "")}
               height="100%"
               defaultLanguage="plaintext"
               options={{
+                ariaLabel: "L source code",
+                readOnly: isEvaluating,
                 fontSize: 14,
                 fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
                 minimap: { enabled: false },
@@ -558,6 +503,7 @@ export default function App() {
                 selectOnLineNumbers: true,
               }}
             />
+            </Suspense>
           </div>
         </div>
 
@@ -592,7 +538,7 @@ export default function App() {
               <TabsContent value="output" className="h-full m-0">
                 <div className="h-full p-4">
                   <div className="bg-gray-900 text-green-400 p-4 rounded-md h-full overflow-auto font-mono text-sm">
-                    <pre className="whitespace-pre-wrap">{formatOutput()}</pre>
+                    <pre data-testid="output" aria-live="polite" className="whitespace-pre-wrap">{formatOutput()}</pre>
                   </div>
                 </div>
               </TabsContent>
